@@ -4,7 +4,10 @@ import shlex
 import shutil
 import sys
 import textwrap
+from pathlib import Path
 
+from . import listfile
+from .fs import display
 from .index import NAME_RE
 
 try:
@@ -51,7 +54,7 @@ def usage_lines(name):
         "",
         "Commands:",
         "  update                  Update the package lists and verify their signatures",
-        "  dl [-n] <pkg> [pkg...]  Download packages and their dependencies",
+        "  dl [-n] <pkg|list.txt>  Download packages and their dependencies",
         "  list [pattern]          List available packages",
         "  info <pkg>              Show package details",
         "  feeds                   Show configured feeds",
@@ -465,6 +468,7 @@ class Shell:
     def _download(self, args):
         with_dependencies = True
         names = []
+        lists = []
         options_done = False
         for arg in args:
             if not options_done and arg == "--":
@@ -474,13 +478,41 @@ class Shell:
             elif not options_done and arg.startswith("-"):
                 self.console.write("%s: unknown option '%s'" % (self.name, arg[:MAX_NAME_ECHO]))
                 return 1
+            elif listfile.is_list(arg):
+                lists.append(arg)
             else:
                 names.append(arg)
-        if not names:
-            self.console.write("Usage: %s dl [-n] <pkg> [pkg...]" % self.name)
+        if not names and not lists:
+            self.console.write("Usage: %s dl [-n] <pkg|list.txt> [...]" % self.name)
             return 1
         for name in names:
             if not NAME_RE.match(name):
                 self.console.write("Unknown package '%s'." % name[:MAX_NAME_ECHO])
                 return 1
-        return self.manager.download(list(dict.fromkeys(names)), with_dependencies)
+        if not lists:
+            return self.manager.download(list(dict.fromkeys(names)), with_dependencies)
+        return self._download_lists(names, lists, with_dependencies)
+
+    def _download_lists(self, names, lists, with_dependencies):
+        directories = list(dict.fromkeys((Path.cwd(), self.config.source.parent)))
+        collected = list(names)
+        invalid = False
+        for argument in lists:
+            try:
+                path = listfile.locate(argument, directories)
+                entries = listfile.read(path)
+            except listfile.ListError as error:
+                self.console.write("%s: %s" % (self.name, error))
+                return 1
+            self.console.write("Read %d packages from %s" % (len(entries), display(path)))
+            for entry in entries:
+                if NAME_RE.match(entry):
+                    collected.append(entry)
+                else:
+                    invalid = True
+                    self.console.write("Invalid package name '%s'." % entry[:MAX_NAME_ECHO])
+        collected = list(dict.fromkeys(collected))
+        if not collected:
+            return 1
+        status = self.manager.download(collected, with_dependencies, True)
+        return 1 if invalid else status

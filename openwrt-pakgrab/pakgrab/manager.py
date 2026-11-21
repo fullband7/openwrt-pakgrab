@@ -229,7 +229,7 @@ class Manager:
             return package, None, "%s: %s: %s" % (self._code("download"), package.name, error)
         return package, outcome, None
 
-    def download(self, names, with_dependencies=True):
+    def download(self, names, with_dependencies=True, skip_unknown=False):
         index = self._ready_index()
         if index is None:
             return 1
@@ -240,9 +240,9 @@ class Manager:
         if not names:
             return 0
         ordered, unknown, missing = index.resolve(names, with_dependencies)
-        if unknown:
-            for name in unknown:
-                self.console.write("Unknown package '%s'." % name)
+        for name in unknown:
+            self.console.write("Unknown package '%s'." % name)
+        if unknown and (not skip_unknown or not ordered):
             return 1
         errors = []
         counts = {DOWNLOADED: 0, UPDATED: 0, CURRENT: 0}
@@ -262,7 +262,7 @@ class Manager:
                     self.console.write("Downloaded %s as %s" % (package.name, display(outcome.destination)))
         for requirer, dependency in missing:
             errors.append("%s: Cannot satisfy dependency '%s' required by %s" % (self._code("resolve"), dependency, requirer))
-        status = self._report(errors)
+        status = self._report(errors) or int(bool(unknown))
         summary = "%d Files Downloaded | %d Files Updated" % (counts[DOWNLOADED], counts[UPDATED])
         if status:
             self.console.write(summary)
