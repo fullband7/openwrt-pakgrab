@@ -59,6 +59,17 @@ root@OpenWrt:~# opkg dl dnsmasq-full
 
 Downloaded files are saved in the `repo` folder next to the program.
 
+### Download from a list
+
+Put all the packages you want in a `.txt` file, separated by spaces or one per line, and pass the file to `dl` :
+
+```
+root@OpenWrt:~# apk dl mypkg.txt
+root@OpenWrt:~# opkg dl mypkg.txt
+```
+
+Any file name works as long as it ends with `.txt`. Duplicates are ignored, shared dependencies are downloaded once, and packages that are not found are reported while the rest continue. Lines can have `#` notes. Use `-n` to skip dependencies.
+
 ### Windows App
 
 Grab the ready-made `Standalone` or `Onefile` (exe) from the [Releases](https://github.com/fullband7/openwrt-pakgrab/releases) page.
