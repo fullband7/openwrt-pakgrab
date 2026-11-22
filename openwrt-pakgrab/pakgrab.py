@@ -15,7 +15,7 @@ def main(argv=None):
         sys.stderr.write("error: %s\n" % error)
         return 1
     console = Console(width=max(0, min(args.width, 1000)))
-    manager, shell = assemble(config, manager_class, keys, mirror, args, console, input)
+    manager, shell = assemble(config, manager_class, keys, mirror, args, console, input, BASE_DIR)
     if args.command is not None:
         return shell.run_line(args.command)
     shell.show_summary()

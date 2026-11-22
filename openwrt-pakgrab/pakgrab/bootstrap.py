@@ -4,7 +4,7 @@ from pathlib import Path
 
 from . import ecdsa, usign
 from .apkmanager import ApkManager
-from .config import discover
+from .config import ConfigError, available, discover
 from .manager import Manager
 from .net import Fetcher
 from .terminal import Shell
@@ -30,8 +30,8 @@ def build_parser(base_dir, description, terminal=True):
     return parser
 
 
-def prepare(args, base_dir):
-    config = discover([base_dir, Path.cwd()], args.config)
+def prepare(args, base_dir, explicit=None):
+    config = discover([base_dir, Path.cwd()], explicit or args.config)
     if config.manager == "APK":
         keys, _ = ecdsa.load_keys(args.keys)
         manager_class = ApkManager
@@ -41,7 +41,34 @@ def prepare(args, base_dir):
     return config, keys, manager_class, Path(args.dir).resolve()
 
 
-def assemble(config, manager_class, keys, mirror, args, console, ask):
+class Loader:
+    def __init__(self, args, base_dir, fetcher, console):
+        self.args = args
+        self.base_dir = base_dir
+        self.fetcher = fetcher
+        self.console = console
+
+    def files(self):
+        return available([self.base_dir, Path.cwd()])
+
+    def resolve(self, name):
+        for directory in (self.base_dir, Path.cwd()):
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+        return Path(name)
+
+    def load(self, path):
+        try:
+            config, keys, manager_class, mirror = prepare(self.args, self.base_dir, path)
+        except OSError as error:
+            raise ConfigError("cannot read %s: %s" % (path, error.strerror))
+        manager = manager_class(config, mirror, keys, self.fetcher, self.console)
+        return config, len(keys), manager
+
+
+def assemble(config, manager_class, keys, mirror, args, console, ask, base_dir):
     fetcher = Fetcher(allow_http=args.allow_http, timeout=max(1, min(args.timeout, 300)))
     manager = manager_class(config, mirror, keys, fetcher, console)
-    return manager, Shell(config, manager, console, len(keys), mirror, ask)
+    loader = Loader(args, base_dir, fetcher, console)
+    return manager, Shell(config, manager, console, len(keys), mirror, ask, loader)

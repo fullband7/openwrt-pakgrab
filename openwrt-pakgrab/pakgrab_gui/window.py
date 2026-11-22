@@ -1,5 +1,6 @@
 import ctypes
 import os
+import shlex
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QKeySequence, QPalette, QShortcut
@@ -81,17 +82,9 @@ class MainWindow(QWidget):
         self.resize(1124, 668)
         self.setMinimumSize(400, 260)
 
-        session = (
-            ("Manager", config.manager),
-            ("Arch", config.arch),
-            ("Release", config.release),
-            ("Feeds", str(len(config.feeds))),
-            ("Keys", str(keys_count)),
-            ("Config", config.source.name),
-        )
-        self.sidebar = SideBar(mirror.name or str(mirror), [feed.name for feed in config.feeds], session, self)
+        self.sidebar = SideBar(mirror.name or str(mirror), self)
         self.view = TerminalView(self)
-        self.status = StatusBar(("UTF-8", "%s %s" % (config.manager, config.release), config.arch), self)
+        self.status = StatusBar(self._status_items(), self)
         self.palette = Palette(self._palette_items(), self.view)
         self.topbar = TopBar(self)
         self.scrim = Scrim(self)
@@ -103,6 +96,8 @@ class MainWindow(QWidget):
         self.escape = QShortcut(QKeySequence("Esc"), self, activated=self.close_drawer)
         self.escape.setEnabled(False)
 
+        self.sidebar.selected.connect(self._select_feed)
+        self._sidebar_state()
         self.view.completer = self._complete
         self.view.submitted.connect(self._submitted)
         self.view.answered.connect(console.reply)
@@ -113,6 +108,40 @@ class MainWindow(QWidget):
         QShortcut(QKeySequence("Ctrl+P"), self, activated=self.open_palette)
         manager.on_feed = console.feed
 
+    def _status_items(self):
+        config = self.shell.config
+        return ("UTF-8", "%s %s" % (config.manager, config.release), config.arch)
+
+    def _sidebar_state(self):
+        shell = self.shell
+        config = shell.config
+        session = (
+            ("Manager", config.manager),
+            ("Arch", config.arch),
+            ("Release", config.release),
+            ("Feeds", str(len(config.feeds))),
+            ("Keys", str(shell.keys_count)),
+        )
+        self.sidebar.load(
+            [path.name for path in shell.feed_files()],
+            config.source.name,
+            [feed.name for feed in config.feeds],
+            session,
+        )
+
+    def _refresh(self):
+        self.config = self.shell.config
+        self.manager = self.shell.manager
+        self.name = self.manager.command
+        self._sidebar_state()
+        self.status.set_parts(self._status_items())
+        self.palette.items = self._palette_items()
+
+    def _select_feed(self, name):
+        self.close_drawer()
+        if self.view.mode == "shell" and not self.status.busy:
+            self.view.submit_text("feed use " + shlex.quote(name))
+
     def _palette_items(self):
         name = self.name
         return (
@@ -122,6 +151,7 @@ class MainWindow(QWidget):
             ("%s info" % name, "Show package details", "%s info " % name, False),
             ("%s feeds" % name, "Show configured feeds", "%s feeds" % name, True),
             ("%s mirror all" % name, "Download every package of every feed", "%s mirror all" % name, True),
+            ("feed r", "Reload the feed file", "feed r", True),
             ("help", "Show built-in commands", "help", True),
             ("clear", "Clear the screen", "clear", True),
             ("exit", "Close the session", "exit", True),
@@ -129,9 +159,13 @@ class MainWindow(QWidget):
 
     def _complete(self, previous):
         if not previous:
-            return [self.name, "clear", "help", "exit"]
+            return [self.name, "feed", "clear", "help", "exit"]
         if previous == [self.name]:
             return list(SUBCOMMANDS)
+        if previous == ["feed"]:
+            return ["r", "ls", "use"]
+        if previous == ["feed", "use"]:
+            return list(self.sidebar.files)
         if previous == [self.name, "mirror"]:
             return ["all"]
         return []
@@ -222,6 +256,8 @@ class MainWindow(QWidget):
                 self.view.clear()
             elif kind == "feed":
                 self.sidebar.set_feed(op[1], op[2])
+            elif kind == "session":
+                self._refresh()
             elif kind == "ask":
                 self.view.begin_input(((op[1], None, False),), "ask")
             elif kind == "done":
@@ -232,10 +268,12 @@ class MainWindow(QWidget):
             self.view.begin_input(self._prompt(), "shell")
             return
         self.status.set_busy(True)
+        self.sidebar.set_locked(True)
         self.runner.start(line)
 
     def _finished(self):
         self.status.set_busy(False)
+        self.sidebar.set_locked(False)
         self.view.set_live(None)
         if not self.shell.running:
             self.close()

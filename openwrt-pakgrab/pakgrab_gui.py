@@ -23,7 +23,7 @@ def main(argv=None):
         return 1
 
     def factory(console, ask):
-        return assemble(config, manager_class, keys, mirror, args, console, ask)
+        return assemble(config, manager_class, keys, mirror, args, console, ask, BASE_DIR)
 
     return gui.launch(config, len(keys), mirror, factory, BASE_DIR / "pkg.ico")
 

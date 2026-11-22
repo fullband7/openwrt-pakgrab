@@ -101,6 +101,9 @@ class GuiConsole(Console):
     def feed(self, name, ok):
         self._post("feed", name, ok)
 
+    def session(self):
+        self._post("session")
+
     def done(self):
         self._post("done")
 

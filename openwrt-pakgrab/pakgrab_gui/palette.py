@@ -12,7 +12,7 @@ STYLE = """
 #palette QLabel { background: transparent; }
 """
 WIDTH_COLS = 64
-MAX_ROWS = 9
+MAX_ROWS = 10
 ROW_HEIGHT = 24
 
 

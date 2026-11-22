@@ -7,6 +7,7 @@ import textwrap
 from pathlib import Path
 
 from . import listfile
+from .config import ConfigError
 from .fs import display
 from .index import NAME_RE
 
@@ -65,10 +66,29 @@ def usage_lines(name):
     )
 
 
+def feed_lines():
+    return (
+        "Usage: feed <command>",
+        "",
+        "Commands:",
+        "  r, refresh              Reload the feed file",
+        "  ls                      List the available feed files",
+        "  use <file>              Switch to another feed file",
+    )
+
+
+def same_file(left, right):
+    try:
+        return left.samefile(right)
+    except OSError:
+        return left == right
+
+
 def help_lines(name):
     return (
         "Built-in commands:",
         "  %-8s package downloader" % name,
+        "  feed     reload or switch the feed file",
         "  clear    clear the screen",
         "  help     show this help",
         "  exit     close the session",
@@ -320,6 +340,9 @@ class Console:
             self.stream.write(line + "\n")
         self.stream.flush()
 
+    def session(self):
+        return
+
     def clear(self):
         if self.vt:
             self.stream.write("\033[H\033[2J")
@@ -329,15 +352,19 @@ class Console:
 
 
 class Shell:
-    def __init__(self, config, manager, console, keys_count, mirror, ask=input):
+    def __init__(self, config, manager, console, keys_count, mirror, ask=input, loader=None):
         self.ask = ask
         self.config = config
         self.manager = manager
         self.console = console
         self.keys_count = keys_count
         self.mirror = mirror
+        self.loader = loader
         self.running = True
-        self.name = manager.command
+        self._bind()
+
+    def _bind(self):
+        self.name = self.manager.command
         self.commands = {
             self.name: self._package,
             "help": self._help,
@@ -345,8 +372,14 @@ class Shell:
             "exit": self._exit,
             "logout": self._exit,
         }
+        if self.loader is not None:
+            self.commands["feed"] = self._feed
 
     def show_summary(self):
+        self.show_details()
+        self.show_banner()
+
+    def show_details(self):
         write = self.console.write
         write("Package Manager : " + self.config.manager)
         write("Architecture    : " + self.config.arch)
@@ -356,7 +389,6 @@ class Shell:
         write("Mirror          : " + str(self.mirror))
         for warning in self.warnings():
             write("Warning         : " + warning)
-        self.show_banner()
 
     def warnings(self):
         items = list(self.config.warnings)
@@ -444,6 +476,55 @@ class Shell:
         if command == "mirror":
             return self._mirror(rest)
         self.console.write("%s: unknown command '%s'" % (self.name, command[:MAX_NAME_ECHO]))
+        return 1
+
+    def feed_files(self):
+        files = list(self.loader.files())
+        source = self.config.source
+        if not any(same_file(path, source) for path in files):
+            files.insert(0, source)
+        return files
+
+    def _feed_path(self, argument):
+        files = self.feed_files()
+        for path in files:
+            if path.name == argument:
+                return path
+        for path in files:
+            if path.name.lower() == argument.lower():
+                return path
+        return self.loader.resolve(argument)
+
+    def switch(self, path):
+        try:
+            config, keys_count, manager = self.loader.load(path)
+        except ConfigError as error:
+            self.console.write("feed: %s" % error)
+            return 1
+        manager.on_feed = self.manager.on_feed
+        self.config = config
+        self.manager = manager
+        self.keys_count = keys_count
+        self._bind()
+        self.show_details()
+        self.console.session()
+        return 0
+
+    def _feed(self, args):
+        if not args or args[0] in ("help", "-h", "--help"):
+            for line in feed_lines():
+                self.console.write(line)
+            return 0
+        command, rest = args[0], args[1:]
+        if command in ("r", "refresh") and not rest:
+            return self.switch(self.config.source)
+        if command == "ls" and not rest:
+            for path in self.feed_files():
+                self.console.write("%s %s" % ("*" if same_file(path, self.config.source) else " ", path.name))
+            return 0
+        if command == "use" and len(rest) == 1:
+            return self.switch(self._feed_path(rest[0]))
+        self.console.write("Usage: feed r | ls | use <file>")
         return 1
 
     def _mirror(self, args):

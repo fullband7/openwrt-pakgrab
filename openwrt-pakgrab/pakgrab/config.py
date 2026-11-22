@@ -148,9 +148,7 @@ def load(path):
     return Config(tuple(selected), manager, arch, release, path, tuple(warnings))
 
 
-def discover(directories, explicit=None):
-    if explicit:
-        return load(explicit)
+def candidates(directories):
     seen = set()
     for directory in directories:
         directory = Path(directory)
@@ -159,8 +157,30 @@ def discover(directories, explicit=None):
                 if candidate in seen or not candidate.is_file():
                     continue
                 seen.add(candidate)
-                try:
-                    return load(candidate)
-                except ConfigError:
-                    continue
+                yield candidate
+
+
+def available(directories):
+    found = []
+    names = set()
+    for candidate in candidates(directories):
+        if candidate.name in names:
+            continue
+        try:
+            load(candidate)
+        except ConfigError:
+            continue
+        names.add(candidate.name)
+        found.append(candidate)
+    return found
+
+
+def discover(directories, explicit=None):
+    if explicit:
+        return load(explicit)
+    for candidate in candidates(directories):
+        try:
+            return load(candidate)
+        except ConfigError:
+            continue
     raise ConfigError("no distfeeds.conf found next to the program")

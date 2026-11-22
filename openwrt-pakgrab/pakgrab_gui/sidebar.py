@@ -1,5 +1,5 @@
-from PySide6.QtCore import QPointF, QRectF, QUrl, Qt
-from PySide6.QtGui import QDesktopServices, QPainter, QPen
+from PySide6.QtCore import QPointF, QRectF, QUrl, Qt, Signal
+from PySide6.QtGui import QCursor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from pakgrab import __version__
@@ -21,18 +21,25 @@ LINK_ICON = 12
 LINK_SPACE = 6
 FOOTER_MARGIN = 16
 LINK_DROP = 1
+ACCENT_WIDTH = 2
 
 
 class SideBar(QWidget):
-    def __init__(self, root, feeds, session, parent=None):
+    selected = Signal(str)
+
+    def __init__(self, root, parent=None):
         super().__init__(parent)
         self.root = root
-        self.feeds = list(feeds)
-        self.session = list(session)
+        self.files = []
+        self.active = ""
+        self.feeds = []
+        self.session = []
         self.states = {}
         self.offset = 0
         self.overlay = False
         self.hover = False
+        self.hover_file = None
+        self.locked = False
         self.setMouseTracking(True)
         self.setFixedWidth(theme.SIDEBAR_COLS * theme.CELL_W)
         self.setMinimumHeight(theme.PAD_TOP + 10 * theme.CELL_H + self._footer())
@@ -41,12 +48,31 @@ class SideBar(QWidget):
     def _footer():
         return theme.CELL_H * 2 + VERSION_GAP + FOOTER_MARGIN * 2
 
+    def load(self, files, active, feeds, session):
+        self.files = list(files)
+        self.active = active
+        self.feeds = list(feeds)
+        self.session = list(session)
+        self.states = {}
+        self.offset = max(0, min(self.offset, len(self._rows()) - self._visible()))
+        self._track()
+        self.update()
+
+    def set_locked(self, locked):
+        if locked != self.locked:
+            self.locked = locked
+            self._track()
+            self.update()
+
     def set_feed(self, name, ok):
         self.states[name] = READY_STATE if ok else FAILED_STATE
         self.update()
 
     def _rows(self):
-        rows = [("header", "FOLDERS"), ("root", self.root)]
+        rows = [("header", "FEEDS")]
+        rows.extend(("file", name) for name in self.files)
+        rows.append(("blank",))
+        rows.extend((("header", "FOLDERS"), ("root", self.root)))
         rows.extend(("feed", name) for name in self.feeds)
         rows.append(("blank",))
         rows.append(("header", "SESSION"))
@@ -59,15 +85,47 @@ class SideBar(QWidget):
     def _visible(self):
         return max(1, (self._limit() - theme.PAD_TOP) // theme.CELL_H)
 
+    def _placed(self):
+        y = theme.PAD_TOP
+        limit = self._limit()
+        for row in self._rows()[self.offset:]:
+            if y + theme.CELL_H > limit:
+                return
+            yield row, y
+            y += theme.CELL_H + (HEADER_GAP if row[0] == "header" else 0)
+
+    def _file_at(self, position):
+        if self.locked:
+            return None
+        for row, y in self._placed():
+            if row[0] == "file" and y <= position.y() < y + theme.CELL_H:
+                return row[1]
+        return None
+
+    def _track(self, position=None):
+        if position is None:
+            position = QPointF(self.mapFromGlobal(QCursor.pos()))
+            if not self.rect().contains(position.toPoint()):
+                position = QPointF(-1, -1)
+        file = self._file_at(position)
+        inside = self._link_rect().contains(position)
+        if file != self.hover_file or inside != self.hover:
+            self.hover_file = file
+            self.hover = inside
+            self.setCursor(Qt.CursorShape.PointingHandCursor if inside or file else Qt.CursorShape.ArrowCursor)
+            self.update()
+
     def wheelEvent(self, event):
         rows = len(self._rows())
         step = -1 if event.angleDelta().y() > 0 else 1
         self.offset = max(0, min(max(0, rows - self._visible()), self.offset + step))
+        self._track()
         self.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.offset = max(0, min(self.offset, len(self._rows()) - self._visible()))
+        self._track()
 
     def _fit(self, text, indent):
         room = self.width() // theme.CELL_W - theme.PAD_X // theme.CELL_W - indent - 1
@@ -78,21 +136,20 @@ class SideBar(QWidget):
         return QRectF(theme.PAD_X, self.height() - FOOTER_MARGIN - theme.CELL_H * 2 - VERSION_GAP, width, theme.CELL_H)
 
     def mouseMoveEvent(self, event):
-        inside = self._link_rect().contains(event.position())
-        if inside != self.hover:
-            self.hover = inside
-            self.setCursor(Qt.CursorShape.PointingHandCursor if inside else Qt.CursorShape.ArrowCursor)
-            self.update()
+        self._track(event.position())
 
     def leaveEvent(self, event):
-        if self.hover:
-            self.hover = False
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            self.update()
+        self._track(QPointF(-1, -1))
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._link_rect().contains(event.position()):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._link_rect().contains(event.position()):
             QDesktopServices.openUrl(QUrl(LINK_URL))
+            return
+        name = self._file_at(event.position())
+        if name is not None and name != self.active:
+            self.selected.emit(name)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -100,14 +157,12 @@ class SideBar(QWidget):
         cell = theme.CELL_W
         left = theme.PAD_X
         limit = self._limit()
-        y = theme.PAD_TOP
-        for row in self._rows()[self.offset:]:
-            if y + theme.CELL_H > limit:
-                break
+        for row, y in self._placed():
             kind = row[0]
             if kind == "header":
                 draw_text(painter, left, y, row[1], theme.HEADER)
-                y += HEADER_GAP
+            elif kind == "file":
+                self._paint_file(painter, y, row[1])
             elif kind == "root":
                 draw_text(painter, left + INDENT_ROOT * cell, y, self._fit(row[1], INDENT_ROOT), theme.TEXT)
             elif kind == "feed":
@@ -115,11 +170,25 @@ class SideBar(QWidget):
             elif kind == "info":
                 draw_text(painter, left + INDENT_ROOT * cell, y, row[1], theme.LABEL)
                 draw_text(painter, left + INDENT_VALUE * cell, y, self._fit(row[2], INDENT_VALUE), theme.TEXT)
-            y += theme.CELL_H
         self._paint_link(painter)
         draw_text(painter, theme.PAD_X, self.height() - FOOTER_MARGIN - theme.CELL_H, VERSION_TEXT, theme.HEADER)
         if self.overlay:
             painter.fillRect(self.width() - 1, 0, 1, self.height(), theme.qcolor(theme.BORDER))
+
+    def _paint_file(self, painter, y, name):
+        active = name == self.active
+        hovered = name == self.hover_file
+        if hovered:
+            painter.fillRect(0, y, self.width(), theme.CELL_H, theme.qcolor(theme.BG_ITEM))
+        if active:
+            painter.fillRect(0, y, ACCENT_WIDTH, theme.CELL_H, theme.qcolor(theme.GREEN))
+        if self.locked:
+            color = theme.DIM
+        elif active or hovered:
+            color = theme.TEXT
+        else:
+            color = theme.LABEL
+        draw_text(painter, theme.PAD_X + INDENT_ROOT * theme.CELL_W, y, self._fit(name, INDENT_ROOT), color, active)
 
     def _paint_link(self, painter):
         rect = self._link_rect()

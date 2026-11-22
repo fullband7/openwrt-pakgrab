@@ -15,6 +15,10 @@ class StatusBar(QWidget):
         self.busy = False
         self.setFixedHeight(theme.STATUS_HEIGHT)
 
+    def set_parts(self, items):
+        self.parts = list(items)
+        self.update()
+
     def set_busy(self, busy):
         if busy != self.busy:
             self.busy = busy
