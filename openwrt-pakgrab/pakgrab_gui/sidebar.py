@@ -21,7 +21,7 @@ LINK_ICON = 12
 LINK_SPACE = 6
 FOOTER_MARGIN = 16
 LINK_DROP = 1
-ACCENT_WIDTH = 2
+FILE_HEIGHT = 24
 
 
 class SideBar(QWidget):
@@ -89,16 +89,18 @@ class SideBar(QWidget):
         y = theme.PAD_TOP
         limit = self._limit()
         for row in self._rows()[self.offset:]:
-            if y + theme.CELL_H > limit:
+            kind = row[0]
+            height = FILE_HEIGHT if kind == "file" else theme.CELL_H
+            if y + height > limit:
                 return
             yield row, y
-            y += theme.CELL_H + (HEADER_GAP if row[0] == "header" else 0)
+            y += height + (HEADER_GAP if kind == "header" else 0)
 
     def _file_at(self, position):
         if self.locked:
             return None
         for row, y in self._placed():
-            if row[0] == "file" and y <= position.y() < y + theme.CELL_H:
+            if row[0] == "file" and y <= position.y() < y + FILE_HEIGHT:
                 return row[1]
         return None
 
@@ -179,16 +181,14 @@ class SideBar(QWidget):
         active = name == self.active
         hovered = name == self.hover_file
         if hovered:
-            painter.fillRect(0, y, self.width(), theme.CELL_H, theme.qcolor(theme.BG_ITEM))
-        if active:
-            painter.fillRect(0, y, ACCENT_WIDTH, theme.CELL_H, theme.qcolor(theme.GREEN))
+            painter.fillRect(0, y, self.width(), FILE_HEIGHT, theme.qcolor(theme.BG_ITEM))
         if self.locked:
             color = theme.DIM
         elif active or hovered:
             color = theme.TEXT
         else:
             color = theme.LABEL
-        draw_text(painter, theme.PAD_X + INDENT_ROOT * theme.CELL_W, y, self._fit(name, INDENT_ROOT), color, active)
+        draw_text(painter, theme.PAD_X + INDENT_ROOT * theme.CELL_W, y + (FILE_HEIGHT - theme.CELL_H) // 2, self._fit(name, INDENT_ROOT), color, active)
 
     def _paint_link(self, painter):
         rect = self._link_rect()
