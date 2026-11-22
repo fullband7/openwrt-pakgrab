@@ -83,6 +83,7 @@ Pakgrab reads your `distfeeds` file and picks the matching command name automati
 | `apk update` / `opkg update` | Download the package lists of all feeds and verify their signatures |
 | `apk dl <pkg>` / `opkg dl <pkg>` | Download a package together with its dependencies |
 | `apk mirror all` / `opkg mirror all` | Download every package of every feed |
+| `feed r` | Reload the feed file after you edit it |
 | `help` | Show the built-in help |
 | `clear` | Clear the screen |
 | `exit` | Close the session |
