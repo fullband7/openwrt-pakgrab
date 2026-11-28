@@ -15,7 +15,17 @@ from .statusbar import StatusBar
 from .topbar import TITLE, TOPBAR_HEIGHT, Scrim, TopBar
 from .view import TerminalView
 
+from pakgrab.commands import rate_text
+
 SUBCOMMANDS = ("update", "dl", "list", "info", "feeds", "mirror", "help")
+MIRROR_OPTIONS = ("all", "--feeds", "--arch", "--packages", "--no-deps", "--yes", "--dry-run")
+SETTINGS = ("jobs", "limit-rate", "max-bandwidth", "resume")
+SETTING_VALUES = {
+    "jobs": ("1", "2", "4", "8", "16"),
+    "limit-rate": ("off", "500K", "1M", "2M", "5M"),
+    "max-bandwidth": ("0", "512", "1024", "2048", "4096"),
+    "resume": ("on", "off"),
+}
 HINT = (
     theme.sgr(theme.DIM)
     + "Type "
@@ -121,6 +131,8 @@ class MainWindow(QWidget):
             ("Release", config.release),
             ("Feeds", str(len(config.feeds))),
             ("Keys", str(shell.keys_count)),
+            ("Jobs", str(shell.settings.jobs)),
+            ("Limit", rate_text(shell.settings.rate)),
         )
         self.sidebar.load(
             [path.name for path in shell.feed_files()],
@@ -151,6 +163,14 @@ class MainWindow(QWidget):
             ("%s info" % name, "Show package details", "%s info " % name, False),
             ("%s feeds" % name, "Show configured feeds", "%s feeds" % name, True),
             ("%s mirror all" % name, "Download every package of every feed", "%s mirror all" % name, True),
+            ("%s mirror --feeds" % name, "Mirror only selected feeds", "%s mirror --feeds " % name, False),
+            ("%s mirror --arch" % name, "Mirror only selected architectures", "%s mirror --arch " % name, False),
+            ("%s mirror --packages" % name, "Mirror only listed packages", "%s mirror --packages " % name, False),
+            ("%s mirror --dry-run" % name, "Preview a selective mirror", "%s mirror --dry-run " % name, False),
+            ("set jobs", "Set the number of parallel downloads", "set jobs ", False),
+            ("set limit-rate", "Limit the total download speed", "set limit-rate ", False),
+            ("set resume", "Turn partial download resume on or off", "set resume ", False),
+            ("set", "Show transfer settings", "set", True),
             ("feed r", "Reload the feed file", "feed r", True),
             ("help", "Show built-in commands", "help", True),
             ("clear", "Clear the screen", "clear", True),
@@ -166,8 +186,14 @@ class MainWindow(QWidget):
             return ["r", "ls", "use"]
         if previous == ["feed", "use"]:
             return list(self.sidebar.files)
-        if previous == [self.name, "mirror"]:
-            return ["all"]
+        if previous == ["set"]:
+            return list(SETTINGS)
+        if len(previous) == 2 and previous[0] == "set":
+            return list(SETTING_VALUES.get(previous[1], ()))
+        if previous[:2] == [self.name, "mirror"]:
+            if previous[-1] in ("--feeds", "-f"):
+                return [feed.name for feed in self.shell.config.feeds]
+            return list(MIRROR_OPTIONS)
         return []
 
     def showEvent(self, event):

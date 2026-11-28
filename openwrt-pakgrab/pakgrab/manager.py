@@ -1,6 +1,5 @@
 import fnmatch
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import adb, usign
@@ -8,13 +7,13 @@ from .fs import PathError, display, safe_join, write_atomic
 from .index import Index, parse_packages
 from .mirror import Mirror
 from .net import FetchError, gunzip
+from .runner import Job, Runner
 from .versions import CURRENT, DOWNLOADED, UPDATED, Outcome, identify_ipk, newest, scan
 
 MAX_INDEX_SIZE = 64 * 1024 * 1024
 MAX_PACKAGE_SIZE = 512 * 1024 * 1024
 MAX_SIGNATURE_SIZE = 4096
 MAX_PATTERN_LENGTH = 128
-MAX_WORKERS = 4
 LIST_FILES = ("Packages.gz", "Packages", "Packages.sig")
 
 
@@ -27,6 +26,7 @@ class Manager:
         self.keys = keys
         self.fetcher = fetcher
         self.console = console
+        self.settings = fetcher.settings
         self.catalog = {}
         self.names = {}
         self.catalog_lock = threading.Lock()
@@ -220,14 +220,31 @@ class Manager:
             return Outcome(UPDATED, destination, url, newest([version for version, path in stale]))
         return Outcome(DOWNLOADED, destination, url, "")
 
-    def _transfer(self, package):
-        try:
+    def _failure(self, package, error):
+        if isinstance(error, FetchError):
+            return "%s: Failed to download %s: %s" % (self._code("download"), package.name, error)
+        return "%s: %s: %s" % (self._code("download"), package.name, error)
+
+    def _job(self, package, outcomes):
+        name = package.filename or package.name
+        url = "%s/%s" % (package.feed.url, name)
+
+        def action():
             outcome = self.sync_package(package)
-        except FetchError as error:
-            return package, None, "%s: Failed to download %s: %s" % (self._code("download"), package.name, error)
-        except (PathError, OSError) as error:
-            return package, None, "%s: %s: %s" % (self._code("download"), package.name, error)
-        return package, outcome, None
+            outcomes[package.name] = outcome
+            return outcome.status
+
+        return Job(name, url, action, package.size, lambda error: self._failure(package, error), package)
+
+    def _announce(self, package, outcome):
+        if outcome.status == CURRENT:
+            self.console.write("%s %s is already up to date as %s" % (package.name, outcome.previous, display(outcome.destination)))
+            return
+        self.console.write("Downloading " + self._label(package, outcome.url))
+        if outcome.status == UPDATED:
+            self.console.write("Updated %s (%s -> %s) as %s" % (package.name, outcome.previous, package.version, display(outcome.destination)))
+        else:
+            self.console.write("Downloaded %s as %s" % (package.name, display(outcome.destination)))
 
     def download(self, names, with_dependencies=True, skip_unknown=False):
         index = self._ready_index()
@@ -244,22 +261,18 @@ class Manager:
             self.console.write("Unknown package '%s'." % name)
         if unknown and (not skip_unknown or not ordered):
             return 1
-        errors = []
-        counts = {DOWNLOADED: 0, UPDATED: 0, CURRENT: 0}
-        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(ordered))) as pool:
-            for package, outcome, error in pool.map(self._transfer, ordered):
-                if error:
-                    errors.append(error)
-                    continue
-                counts[outcome.status] += 1
-                if outcome.status == CURRENT:
-                    self.console.write("%s %s is already up to date as %s" % (package.name, outcome.previous, display(outcome.destination)))
-                    continue
-                self.console.write("Downloading " + self._label(package, outcome.url))
-                if outcome.status == UPDATED:
-                    self.console.write("Updated %s (%s -> %s) as %s" % (package.name, outcome.previous, package.version, display(outcome.destination)))
-                else:
-                    self.console.write("Downloaded %s as %s" % (package.name, display(outcome.destination)))
+        outcomes = {}
+
+        def report(result):
+            package = result.job.payload
+            if result.error is None and package.name in outcomes:
+                self._announce(package, outcomes[package.name])
+
+        runner = Runner(self.console, self.fetcher, self.settings.jobs)
+        jobs = [self._job(package, outcomes) for package in ordered]
+        batch = runner.run("Downloading %d packages" % len(jobs), jobs, on_result=report)
+        errors = list(batch.errors)
+        counts = batch.counts
         for requirer, dependency in missing:
             errors.append("%s: Cannot satisfy dependency '%s' required by %s" % (self._code("resolve"), dependency, requirer))
         status = self._report(errors) or int(bool(unknown))
@@ -270,8 +283,11 @@ class Manager:
             self.console.success(summary)
         return status
 
+    def mirror_job(self, selection=None):
+        return Mirror(self, selection)
+
     def mirror_all(self):
-        return Mirror(self).run()
+        return self.mirror_job().run()
 
     def list_packages(self, pattern=None):
         index = self._ready_index()

@@ -7,9 +7,18 @@ import textwrap
 from pathlib import Path
 
 from . import listfile
+from .commands import (
+    HelpRequested,
+    UsageError,
+    apply_setting,
+    describe_settings,
+    parse_mirror,
+    rate_text,
+)
 from .config import ConfigError
 from .fs import display
 from .index import NAME_RE
+from .selection import SelectionError
 
 try:
     import readline
@@ -60,9 +69,42 @@ def usage_lines(name):
         "  info <pkg>              Show package details",
         "  feeds                   Show configured feeds",
         "  mirror all              Download every package of every feed",
+        "  mirror [filters]        Download only the selected packages",
         "",
         "Options:",
         "  -n, --no-deps           Do not download dependencies",
+        "",
+        "Mirror filters:",
+        "  -f, --feeds LIST        Only these feeds, e.g. base,luci",
+        "  -a, --arch LIST         Only these architectures (arch independent packages are kept)",
+        "  -p, --packages LIST     Only these packages or list files (name,name,list.txt)",
+        "  -n, --no-deps           Do not add dependencies of the listed packages",
+        "  -y, --yes               Do not ask for confirmation",
+        "      --dry-run           Show what would be mirrored and exit",
+    )
+
+
+def mirror_lines(name):
+    return (
+        "Usage: %s mirror [all] [--feeds LIST] [--arch LIST] [--packages LIST] [-n] [-y] [--dry-run]" % name,
+        "",
+        "  -f, --feeds LIST        Only these feeds, e.g. base,luci (names or short names, wildcards allowed)",
+        "  -a, --arch LIST         Only these architectures, arch independent packages are kept",
+        "  -p, --packages LIST     Only these packages, comma separated names or .txt list files",
+        "  -n, --no-deps           Do not add dependencies of the listed packages",
+        "  -y, --yes               Do not ask for confirmation",
+        "      --dry-run           Show what would be mirrored and exit",
+    )
+
+
+def set_lines():
+    return (
+        "Usage: set [jobs N | limit-rate RATE | max-bandwidth KBPS | resume on|off]",
+        "",
+        "  jobs N                  Parallel downloads (1-16)",
+        "  limit-rate RATE         Total speed cap, e.g. 500K, 2M or off",
+        "  max-bandwidth KBPS      Total speed cap in KiB/s, 0 for unlimited",
+        "  resume on|off           Continue partial downloads",
     )
 
 
@@ -89,6 +131,7 @@ def help_lines(name):
         "Built-in commands:",
         "  %-8s package downloader" % name,
         "  feed     reload or switch the feed file",
+        "  set      show or change jobs, speed limit and resume",
         "  clear    clear the screen",
         "  help     show this help",
         "  exit     close the session",
@@ -372,8 +415,13 @@ class Shell:
             "exit": self._exit,
             "logout": self._exit,
         }
+        self.commands["set"] = self._set
         if self.loader is not None:
             self.commands["feed"] = self._feed
+
+    @property
+    def settings(self):
+        return self.manager.settings
 
     def show_summary(self):
         self.show_details()
@@ -387,6 +435,7 @@ class Shell:
         write("Feeds           : %d (%s)" % (len(self.config.feeds), self.config.source.name))
         write("Trusted keys    : %d" % self.keys_count)
         write("Mirror          : " + str(self.mirror))
+        write("Transfers       : %d jobs, limit %s, resume %s" % (self.settings.jobs, rate_text(self.settings.rate), "on" if self.settings.resume else "off"))
         for warning in self.warnings():
             write("Warning         : " + warning)
 
@@ -527,18 +576,72 @@ class Shell:
         self.console.write("Usage: feed r | ls | use <file>")
         return 1
 
-    def _mirror(self, args):
-        if args != ["all"]:
-            self.console.write("Usage: %s mirror all" % self.name)
-            return 1
+    def _confirm(self, question):
         try:
-            answer = self.ask(CONFIRMATION + " ")
+            answer = self.ask(question + " ")
         except EOFError:
             answer = ""
-        if answer.strip() not in ("y", "Y"):
+        return answer.strip() in ("y", "Y")
+
+    def _directories(self):
+        return list(dict.fromkeys((Path.cwd(), self.config.source.parent)))
+
+    def _mirror(self, args):
+        try:
+            options = parse_mirror(args, self._directories())
+        except HelpRequested:
+            for line in mirror_lines(self.name):
+                self.console.write(line)
+            return 0
+        except UsageError as error:
+            self.console.write("%s mirror: %s" % (self.name, error))
+            self.console.write("Try '%s mirror --help'." % self.name)
+            return 1
+        selection = options.selection
+        if not options.dry_run and not selection.active and not options.assume_yes:
+            if not self._confirm(CONFIRMATION):
+                self.console.write("Mirror cancelled.")
+                return 1
+        job = self.manager.mirror_job(selection)
+        try:
+            plan = job.prepare()
+        except SelectionError as error:
+            self.console.write("%s mirror: %s" % (self.name, error))
+            return 1
+        if plan is None:
+            return 1
+        job.describe(plan)
+        if options.dry_run:
+            return 1 if plan.unknown else 0
+        if not plan.count:
+            self.console.write("No packages match the selection.")
+            return 1
+        if selection.active and not options.assume_yes and not self._confirm(job.question(plan)):
             self.console.write("Mirror cancelled.")
             return 1
-        return self.manager.mirror_all()
+        return job.run(plan)
+
+    def _set(self, args):
+        if not args:
+            for line in describe_settings(self.settings):
+                self.console.write(line)
+            return 0
+        if args[0] in ("help", "-h", "--help"):
+            for line in set_lines():
+                self.console.write(line)
+            return 0
+        if len(args) != 2:
+            self.console.write("Usage: set <name> <value>")
+            return 1
+        try:
+            apply_setting(self.settings, args[0], args[1])
+        except UsageError as error:
+            self.console.write("set: %s" % error)
+            return 1
+        self.console.session()
+        for line in describe_settings(self.settings):
+            self.console.write(line)
+        return 0
 
     def _info(self, name):
         if not NAME_RE.match(name):

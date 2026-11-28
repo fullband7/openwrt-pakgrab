@@ -159,6 +159,18 @@ def key_id(point):
     return hashlib.sha512(point).digest()[:KEY_ID_SIZE]
 
 
+def parse_key(data):
+    try:
+        text = data.decode("ascii")
+        match = PEM_RE.search(text)
+        if not match:
+            raise KeyFormatError("no public key")
+        point = decode_public_key(base64.b64decode("".join(match.group(1).split()), validate=True))
+    except (UnicodeDecodeError, binascii.Error, ValueError):
+        raise KeyFormatError("unusable key")
+    return key_id(point), point
+
+
 def load_keys(directory):
     keys = {}
     skipped = 0
@@ -171,14 +183,11 @@ def load_keys(directory):
         try:
             if not entry.is_file() or entry.stat().st_size > MAX_KEY_FILE_SIZE:
                 raise KeyFormatError("unusable file")
-            match = PEM_RE.search(entry.read_text(encoding="ascii"))
-            if not match:
-                raise KeyFormatError("no public key")
-            point = decode_public_key(base64.b64decode("".join(match.group(1).split()), validate=True))
-        except (KeyFormatError, OSError, UnicodeDecodeError, binascii.Error, ValueError):
+            identifier, point = parse_key(entry.read_bytes())
+        except (KeyFormatError, OSError):
             skipped += 1
             continue
-        keys[key_id(point)] = point
+        keys[identifier] = point
     return keys, skipped
 
 

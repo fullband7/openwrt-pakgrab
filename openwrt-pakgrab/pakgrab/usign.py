@@ -32,6 +32,11 @@ def _decode_blob(data, expected_size):
     return blob
 
 
+def parse_key(data):
+    blob = _decode_blob(data, KEY_BLOB_SIZE)
+    return blob[2:10], blob[10:]
+
+
 def load_keys(directory):
     keys = {}
     skipped = 0
@@ -43,11 +48,11 @@ def load_keys(directory):
             skipped += 1
             continue
         try:
-            blob = _decode_blob(entry.read_bytes(), KEY_BLOB_SIZE)
+            fingerprint, key = parse_key(entry.read_bytes())
         except (SignatureError, OSError):
             skipped += 1
             continue
-        keys[blob[2:10]] = blob[10:]
+        keys[fingerprint] = key
     return keys, skipped
 
 
