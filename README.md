@@ -83,6 +83,10 @@ Pakgrab reads your `distfeeds` file and picks the matching command name automati
 | `apk update` / `opkg update` | Download the package lists of all feeds and verify their signatures |
 | `apk dl <pkg>` / `opkg dl <pkg>` | Download a package together with its dependencies |
 | `apk mirror all` / `opkg mirror all` | Download every package of every feed |
+| `apk mirror --feeds base,luci` / `opkg mirror --feeds base,luci` | Mirror only the chosen feeds |
+| `apk mirror --arch <arch>` / `opkg mirror --arch <arch>` | Mirror only one architecture |
+| `apk mirror --packages a,b,list.txt` / `opkg mirror --packages a,b,list.txt` | Mirror only the listed packages |
+| `set jobs 8` / `set limit-rate 2M` | Change parallel downloads or the speed limit |
 | `feed r` | Reload the feed file after you edit it |
 | `help` | Show the built-in help |
 | `clear` | Clear the screen |
